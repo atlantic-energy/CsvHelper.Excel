@@ -1,0 +1,42 @@
+# Atlantic Energy's fork only: builds, tests and publishes the package to the atlantic-energy GitHub Packages feed
+# as AE.CsvHelper.Excel.Core, so it cannot be confused with upstream's CsvHelper.Excel.Core on nuget.org. The
+# version is the VersionPrefix in CsvHelper.Excel.csproj; publishing a version that is already on the feed is
+# skipped, so move the prefix to publish a new one.
+name: Publish to the Atlantic Energy feed
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore dependencies
+        run: dotnet restore ./src/CsvHelper.Excel.sln
+      - name: Build
+        run: dotnet build --no-restore --configuration Release ./src/CsvHelper.Excel.sln
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal ./src/CsvHelper.Excel.sln
+      - name: Pack
+        run: >-
+          dotnet pack --no-build --configuration Release ./src/CsvHelper.Excel/CsvHelper.Excel.csproj --output ./packages
+          -p:PackageId=AE.CsvHelper.Excel.Core
+          -p:RepositoryUrl=https://github.com/${{ github.repository }}
+      - name: Push
+        run: >-
+          dotnet nuget push "./packages/*.nupkg"
+          --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          --api-key ${{ secrets.GITHUB_TOKEN }}
+          --skip-duplicate

@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
@@ -21,9 +21,9 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.8
       - name: Setup .NET
-        uses: actions/setup-dotnet@v1
+        uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: 8.0.x
       - name: Restore dependencies
         run: dotnet restore ./src/CsvHelper.Excel.sln
       - name: Build

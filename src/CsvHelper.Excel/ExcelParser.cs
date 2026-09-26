@@ -1,55 +1,41 @@
+using System;
 using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
-using System;
-using System.Linq;
-using System.Runtime.CompilerServices;
 using ClosedXML.Excel;
 using CsvHelper.Configuration;
 
 namespace CsvHelper.Excel
 {
     /// <summary>
-    /// Parses an Excel file.
+    /// Parses an Excel worksheet, so a <see cref="CsvReader"/> reads records from it — class maps, type conversion,
+    /// <c>GetRecords</c> — the way it reads a CSV file.
     /// </summary>
+    /// <remarks>
+    /// A typed cell is handed to CsvHelper as text in the configuration's culture, which is the culture CsvHelper
+    /// converts it back with. The records are the used range of the sheet, wherever it starts, and a blank cell inside
+    /// it reads as an empty field.
+    /// </remarks>
     public class ExcelParser : IParser
     {
-        private readonly bool _leaveOpen;
-
-        private bool _disposed;
-        private int _row = 1;
         private readonly IXLWorksheet _worksheet;
-        private readonly Stream _stream;
-        private int _rawRow = 1;
-        private string[] _currentRecord;
+        private readonly IDisposable? _ownedWorkbook;
+        private readonly Stream? _stream;
+        private readonly bool _leaveOpen;
+        private readonly CultureInfo _culture;
+        private readonly int _firstRow;
+        private readonly int _firstColumn;
         private readonly int _lastRow;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ExcelParser"/> class.
-        /// </summary>
-        /// <param name="path">The path.</param>
-        public ExcelParser(string path) : this(
-            File.Open(path, FileMode.OpenOrCreate, FileAccess.Read), null, CultureInfo.InvariantCulture)
-        {
-        }
+        private string[] _record = Array.Empty<string>();
+        private int _row = 1;
+        private bool _disposed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ExcelParser"/> class.
         /// </summary>
         /// <param name="path">The path.</param>
-        /// <param name="sheetName">The sheet name</param>
-        public ExcelParser(string path, string sheetName) : this(
-            File.Open(path, FileMode.OpenOrCreate, FileAccess.Read), sheetName, CultureInfo.InvariantCulture)
-        {
-        }
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ExcelParser"/> class.
-        /// </summary>
-        /// <param name="path">The path.</param>
-        /// <param name="culture">The culture.</param>
-        public ExcelParser(string path, CultureInfo culture) : this(
-            File.Open(path, FileMode.OpenOrCreate, FileAccess.Read), null, culture)
+        public ExcelParser(string path) : this(File.OpenRead(path), null, CultureInfo.InvariantCulture)
         {
         }
 
@@ -58,43 +44,59 @@ namespace CsvHelper.Excel
         /// </summary>
         /// <param name="path">The path.</param>
         /// <param name="sheetName">The sheet name</param>
-        /// <param name="culture">The culture.</param>
-        public ExcelParser(string path, string sheetName, CultureInfo culture) : this(
-            File.Open(path, FileMode.OpenOrCreate, FileAccess.Read), sheetName, culture)
+        public ExcelParser(string path, string? sheetName) : this(File.OpenRead(path), sheetName, CultureInfo.InvariantCulture)
         {
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ExcelParser"/> class.
         /// </summary>
-        /// <param name="stream">The stream.</param>
+        /// <param name="path">The path.</param>
         /// <param name="culture">The culture.</param>
-        /// <param name="leaveOpen"><c>true</c> to leave the <see cref="TextWriter"/> open after the <see cref="ExcelParser"/> object is disposed, otherwise <c>false</c>.</param>
-        public ExcelParser(Stream stream, CultureInfo culture, bool leaveOpen = false) : this(stream, null, culture,
-            leaveOpen)
+        public ExcelParser(string path, CultureInfo culture) : this(File.OpenRead(path), null, culture)
         {
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ExcelParser"/> class.
         /// </summary>
-        /// <param name="stream">The stream.</param>
+        /// <param name="path">The path.</param>
         /// <param name="sheetName">The sheet name</param>
         /// <param name="culture">The culture.</param>
-        /// <param name="leaveOpen"><c>true</c> to leave the <see cref="TextWriter"/> open after the <see cref="ExcelParser"/> object is disposed, otherwise <c>false</c>.</param>
-        public ExcelParser(Stream stream, string sheetName, CultureInfo culture, bool leaveOpen = false) : this(stream,
-            sheetName, new CsvConfiguration(culture) {LeaveOpen= leaveOpen})
+        public ExcelParser(string path, string? sheetName, CultureInfo culture) : this(File.OpenRead(path), sheetName, culture)
         {
         }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ExcelParser"/> class.
         /// </summary>
-        /// <param name="path">The stream.</param>
+        /// <param name="path">The path.</param>
         /// <param name="sheetName">The sheet name</param>
         /// <param name="configuration">The configuration.</param>
-        public ExcelParser(string path, string sheetName, CsvConfiguration configuration) : this(
-            File.Open(path, FileMode.OpenOrCreate, FileAccess.Read), sheetName, configuration)
+        public ExcelParser(string path, string? sheetName, IParserConfiguration configuration)
+            : this(File.OpenRead(path), sheetName, configuration)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ExcelParser"/> class.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="culture">The culture.</param>
+        /// <param name="leaveOpen"><c>true</c> to leave the <see cref="Stream"/> open after the <see cref="ExcelParser"/> object is disposed, otherwise <c>false</c>.</param>
+        public ExcelParser(Stream stream, CultureInfo culture, bool leaveOpen = false) : this(stream, null, culture, leaveOpen)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ExcelParser"/> class.
+        /// </summary>
+        /// <param name="stream">The stream.</param>
+        /// <param name="sheetName">The sheet name</param>
+        /// <param name="culture">The culture.</param>
+        /// <param name="leaveOpen"><c>true</c> to leave the <see cref="Stream"/> open after the <see cref="ExcelParser"/> object is disposed, otherwise <c>false</c>.</param>
+        public ExcelParser(Stream stream, string? sheetName, CultureInfo culture, bool leaveOpen = false)
+            : this(stream, sheetName, new CsvConfiguration(culture), leaveOpen)
         {
         }
 
@@ -104,33 +106,92 @@ namespace CsvHelper.Excel
         /// <param name="stream">The stream.</param>
         /// <param name="sheetName">The sheet name</param>
         /// <param name="configuration">The configuration.</param>
-        public ExcelParser(Stream stream, string sheetName, CsvConfiguration configuration)
+        /// <param name="leaveOpen"><c>true</c> to leave the <see cref="Stream"/> open after the <see cref="ExcelParser"/> object is disposed, otherwise <c>false</c>.</param>
+        public ExcelParser(Stream stream, string? sheetName, IParserConfiguration configuration, bool leaveOpen = false)
+            : this(OpenWorksheet(stream, sheetName, out var workbook), configuration)
         {
-            var workbook = new XLWorkbook(stream, XLEventTracking.Disabled);
-
-            _worksheet = string.IsNullOrEmpty(sheetName) ? workbook.Worksheet(1) : workbook.Worksheet(sheetName);
-
-            Configuration = configuration ?? new CsvConfiguration(CultureInfo.InvariantCulture);
+            _ownedWorkbook = workbook;
             _stream = stream;
-            var lastRowUsed = _worksheet.LastRowUsed();
-            if (lastRowUsed != null)
-            {
-                _lastRow = lastRowUsed.RowNumber();
+            _leaveOpen = leaveOpen;
+        }
 
-                var cellsUsed = _worksheet.CellsUsed();
-                Count = cellsUsed.Max(c => c.Address.ColumnNumber) -
-                    cellsUsed.Min(c => c.Address.ColumnNumber) + 1;
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ExcelParser"/> class that reads <paramref name="worksheet"/>.
+        /// The workbook is the caller's: this parser does not dispose it.
+        /// </summary>
+        /// <param name="worksheet">The worksheet.</param>
+        /// <param name="configuration">The configuration.</param>
+        public ExcelParser(IXLWorksheet worksheet, IParserConfiguration configuration)
+        {
+            _worksheet = worksheet;
+            _leaveOpen = true;
+            Configuration = configuration ?? new CsvConfiguration(CultureInfo.InvariantCulture);
+            _culture = Configuration.CultureInfo;
+            Context = new CsvContext(this);
+
+            var used = worksheet.RangeUsed();
+            if (used is not null)
+            {
+                _firstRow = used.FirstRow().RowNumber();
+                _firstColumn = used.FirstColumn().ColumnNumber();
+                _lastRow = used.LastRow().RowNumber();
+                Count = used.LastColumn().ColumnNumber() - _firstColumn + 1;
+            }
+        }
+
+        /// <inheritdoc/>
+        public long ByteCount => -1;
+
+        /// <inheritdoc/>
+        public long CharCount => -1;
+
+        /// <inheritdoc/>
+        public int Count { get; }
+
+        /// <inheritdoc/>
+        public string this[int index] => index >= 0 && index < _record.Length ? _record[index] : null!;
+
+        /// <inheritdoc/>
+        public string[]? Record => _record;
+
+        /// <inheritdoc/>
+        public string RawRecord => string.Join(Configuration.Delimiter, _record);
+
+        /// <inheritdoc/>
+        public int Row => _row;
+
+        /// <inheritdoc/>
+        public int RawRow => _row;
+
+        /// <inheritdoc/>
+        public string Delimiter => Configuration.Delimiter;
+
+        /// <inheritdoc/>
+        public CsvContext Context { get; }
+
+        /// <inheritdoc/>
+        public IParserConfiguration Configuration { get; }
+
+        /// <inheritdoc/>
+        public bool Read()
+        {
+            var sheetRow = _firstRow + _row - 1;
+            if (Count == 0 || sheetRow > _lastRow)
+            {
+                return false;
             }
 
-            Context = new CsvContext(this);
-            _leaveOpen = Configuration.LeaveOpen;
+            _record = ReadRow(sheetRow);
+            _row++;
+            return true;
         }
 
+        /// <inheritdoc/>
+        public Task<bool> ReadAsync() => Task.FromResult(Read());
 
         /// <inheritdoc/>
         public void Dispose()
         {
-            // Do not change this code. Put cleanup code in 'Dispose(bool disposing)' method
             Dispose(disposing: true);
             GC.SuppressFinalize(this);
         }
@@ -144,72 +205,33 @@ namespace CsvHelper.Excel
 
             if (disposing)
             {
-                // Dispose managed state (managed objects)
-
+                _ownedWorkbook?.Dispose();
                 if (!_leaveOpen)
                 {
                     _stream?.Dispose();
                 }
             }
 
-            // Free unmanaged resources (unmanaged objects) and override finalizer
-            // Set large fields to null
-
             _disposed = true;
         }
 
-        public bool Read()
+        private string[] ReadRow(int sheetRow)
         {
-            if (Row > _lastRow)
+            var trim = Configuration.TrimOptions.HasFlag(TrimOptions.Trim);
+            var values = new string[Count];
+            for (var offset = 0; offset < Count; offset++)
             {
-                return false;
+                var text = _worksheet.Cell(sheetRow, _firstColumn + offset).Value.ToString(_culture);
+                values[offset] = trim ? text.Trim() : text;
             }
-
-            _currentRecord = GetRecord();
-            _row++;
-            _rawRow++;
-            return true;
-        }
-
-        public Task<bool> ReadAsync()
-        {
-            if (Row > _lastRow)
-            {
-                return Task.FromResult(false);
-            }
-
-            _currentRecord = GetRecord();
-            _row++;
-            _rawRow++;
-            return Task.FromResult(true);
-        }
-
-        public long ByteCount => -1;
-        public long CharCount => -1;
-        public int Count { get; }
-
-        public string this[int index] => Record.ElementAtOrDefault(index);
-
-        public string[] Record => _currentRecord;
-
-        public string RawRecord => string.Join(Configuration.Delimiter, Record);
-        public int Row => _row;
-        public int RawRow => _rawRow;
-
-        public string Delimiter => Configuration.Delimiter;
-        public CsvContext Context { get; }
-        public IParserConfiguration Configuration { get; }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private string[] GetRecord()
-        {
-            var currentRow = _worksheet.Row(Row);
-            var cells = currentRow.Cells(1, Count);
-            var values = Configuration.TrimOptions.HasFlag(TrimOptions.Trim)
-                ? cells.Select(x => x.Value.ToString()?.Trim()).ToArray()
-                : cells.Select(x => x.Value.ToString()).ToArray();
 
             return values;
+        }
+
+        private static IXLWorksheet OpenWorksheet(Stream stream, string? sheetName, out XLWorkbook workbook)
+        {
+            workbook = new XLWorkbook(stream);
+            return string.IsNullOrEmpty(sheetName) ? workbook.Worksheet(1) : workbook.Worksheet(sheetName);
         }
     }
 }
